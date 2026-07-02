@@ -44,6 +44,7 @@ API_MONTHLY_SUMMARY = "/apis/stationOverView/stateAttributeSummary/category/year
 API_SETTINGS_GET   = "/apis/remote/device/configs/cache/get"  # ?deviceId=<id>
 API_SETTINGS_SET   = "/apis/remote/device/config/write"       # ?deviceId=<id>
 API_DEVICE_LIST    = "/apis/device/list"
+API_STATE_LATEST   = "/apis/deviceState/simple/state/latest/v1"
 
 # ─── Token refresh window ──────────────────────────────────────────────────────
 # Refresh the access token this many seconds *before* its stated expiry.

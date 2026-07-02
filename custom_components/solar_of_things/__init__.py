@@ -271,9 +271,21 @@ class SolarOfThingsDeviceCoordinator(DataUpdateCoordinator):
             settings = await self.hass.async_add_executor_job(
                 self.api.fetch_settings, self.device_id
             )
+            try:
+                state = await self.hass.async_add_executor_job(
+                    self.api.fetch_state, self.device_id
+                )
+            except TokenExpiredError:
+                raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "SolarOfThings device %s: state fetch failed: %s", self.device_id, err
+                )
+                state = {}
             return {
                 "time_series": time_series,
                 "settings": settings,
+                "state": state,
                 "device": self.device_id,
                 "station_id": self.station_id,
                 "device_meta": self.device_meta,

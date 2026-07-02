@@ -7,10 +7,14 @@ from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, Sen
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
+    EntityCategory,
+    UnitOfApparentPower,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
+    UnitOfFrequency,
     UnitOfPower,
+    UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -71,6 +75,19 @@ async def async_setup_entry(
                     sensor_definition=definition,
                 )
             )
+
+        # State-endpoint sensors (temperature, voltages, freq, daily energy, mode)
+        for definition in STATE_SENSORS:
+            entities.append(
+                SolarOfThingsStateSensor(
+                    coordinator, station_id, device_id, device_name, definition
+                )
+            )
+
+        # Active-alarms sensor
+        entities.append(
+            SolarOfThingsAlarmSensor(coordinator, station_id, device_id, device_name)
+        )
 
     # Station-level monthly sensors
     if station_coordinator:
@@ -214,3 +231,111 @@ class SolarOfThingsStationMonthlySensor(CoordinatorEntity, SensorEntity):
             return round(float(val), 2)
         except Exception:
             return None
+
+
+# State-endpoint sensors (read from coordinator.data["state"]["fields"]).
+_SC, _DC = SensorStateClass, SensorDeviceClass
+STATE_SENSORS: list[dict] = [
+    {"key": "inverterHeatSinkTemperature", "name": "Inverter Temperature", "unit": UnitOfTemperature.CELSIUS, "device_class": _DC.TEMPERATURE, "state_class": _SC.MEASUREMENT, "icon": "mdi:thermometer"},
+    {"key": "busVoltage", "name": "Bus Voltage", "unit": UnitOfElectricPotential.VOLT, "device_class": _DC.VOLTAGE, "state_class": _SC.MEASUREMENT, "icon": "mdi:flash"},
+    {"key": "acOutputVoltage", "name": "AC Output Voltage", "unit": UnitOfElectricPotential.VOLT, "device_class": _DC.VOLTAGE, "state_class": _SC.MEASUREMENT, "icon": "mdi:sine-wave"},
+    {"key": "acOutputFrequency", "name": "AC Output Frequency", "unit": UnitOfFrequency.HERTZ, "device_class": _DC.FREQUENCY, "state_class": _SC.MEASUREMENT, "icon": "mdi:sine-wave"},
+    {"key": "acOutputApparentPower", "name": "AC Output Apparent Power", "unit": UnitOfApparentPower.VOLT_AMPERE, "device_class": _DC.APPARENT_POWER, "state_class": _SC.MEASUREMENT, "icon": "mdi:power-plug"},
+    {"key": "outputLoadPercent", "name": "Output Load", "unit": PERCENTAGE, "device_class": None, "state_class": _SC.MEASUREMENT, "icon": "mdi:gauge"},
+    {"key": "gridVoltage", "name": "Grid Voltage", "unit": UnitOfElectricPotential.VOLT, "device_class": _DC.VOLTAGE, "state_class": _SC.MEASUREMENT, "icon": "mdi:transmission-tower"},
+    {"key": "gridFrequency", "name": "Grid Frequency", "unit": UnitOfFrequency.HERTZ, "device_class": _DC.FREQUENCY, "state_class": _SC.MEASUREMENT, "icon": "mdi:transmission-tower"},
+    {"key": "PV1InputVoltage", "name": "PV1 Voltage", "unit": UnitOfElectricPotential.VOLT, "device_class": _DC.VOLTAGE, "state_class": _SC.MEASUREMENT, "icon": "mdi:solar-panel"},
+    {"key": "pv1InputCurrent", "name": "PV1 Current", "unit": UnitOfElectricCurrent.AMPERE, "device_class": _DC.CURRENT, "state_class": _SC.MEASUREMENT, "icon": "mdi:solar-panel"},
+    {"key": "PV1ChargingPower", "name": "PV1 Power", "unit": UnitOfPower.WATT, "device_class": _DC.POWER, "state_class": _SC.MEASUREMENT, "icon": "mdi:solar-power"},
+    {"key": "pvGeneratedEnergyOfDay", "name": "PV Generated", "unit": UnitOfEnergy.KILO_WATT_HOUR, "device_class": _DC.ENERGY, "state_class": _SC.TOTAL_INCREASING, "icon": "mdi:solar-power"},
+    # Diagnostic text sensors (current mode — useful while select read-back is unfixed)
+    {"key": "workingMode", "name": "Working Mode", "text": True, "diagnostic": True, "icon": "mdi:state-machine"},
+    {"key": "chargerSourcePriority", "name": "Charger Priority (current)", "text": True, "diagnostic": True, "icon": "mdi:battery-sync"},
+    {"key": "outputSourcePriority", "name": "Output Priority (current)", "text": True, "diagnostic": True, "icon": "mdi:cog"},
+    {"key": "chargingStatus", "name": "Charging Status", "text": True, "diagnostic": True, "icon": "mdi:battery-charging"},
+]
+
+
+class SolarOfThingsStateSensor(CoordinatorEntity, SensorEntity):
+    """Sensor reading a single field from the state/latest endpoint."""
+
+    def __init__(self, coordinator, station_id, device_id, device_name, definition):
+        super().__init__(coordinator)
+        self._station_id = station_id
+        self._device_id = device_id
+        self._device_name = device_name
+        self._key = definition["key"]
+        self._is_text = definition.get("text", False)
+        self._attr_has_entity_name = True
+        self._attr_name = definition["name"]
+        self._attr_unique_id = f"{DOMAIN}_{station_id}_{device_id}_state_{self._key}"
+        self._attr_icon = definition.get("icon")
+        if definition.get("diagnostic"):
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        if not self._is_text:
+            self._attr_native_unit_of_measurement = definition.get("unit")
+            self._attr_device_class = definition.get("device_class")
+            self._attr_state_class = definition.get("state_class")
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": self._device_name,
+            "manufacturer": "Siseli",
+            "via_device": (DOMAIN, self._station_id),
+        }
+
+    @property
+    def native_value(self):
+        fields = (((self.coordinator.data or {}).get("state") or {}).get("fields") or {})
+        entry = fields.get(self._key)
+        if not isinstance(entry, dict):
+            return None
+        if self._is_text:
+            disp = entry.get("valueDisplay")
+            return disp if disp not in (None, "") else entry.get("value")
+        val = entry.get("value")
+        if val in (None, ""):
+            return None
+        try:
+            return round(float(val), 2)
+        except (TypeError, ValueError):
+            return None
+
+
+class SolarOfThingsAlarmSensor(CoordinatorEntity, SensorEntity):
+    """Reports active (firing) device alarms; 'OK' when none."""
+
+    def __init__(self, coordinator, station_id, device_id, device_name):
+        super().__init__(coordinator)
+        self._station_id = station_id
+        self._device_id = device_id
+        self._device_name = device_name
+        self._attr_has_entity_name = True
+        self._attr_name = "Active Alarms"
+        self._attr_unique_id = f"{DOMAIN}_{station_id}_{device_id}_active_alarms"
+        self._attr_icon = "mdi:alert"
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": self._device_name,
+            "manufacturer": "Siseli",
+            "via_device": (DOMAIN, self._station_id),
+        }
+
+    @property
+    def native_value(self):
+        alarms = ((self.coordinator.data or {}).get("state") or {}).get("firingAlarms") or []
+        names = [a.get("name") for a in alarms if isinstance(a, dict) and a.get("name")]
+        return ", ".join(names) if names else "OK"
+
+    @property
+    def extra_state_attributes(self):
+        alarms = ((self.coordinator.data or {}).get("state") or {}).get("firingAlarms") or []
+        return {
+            "count": len(alarms),
+            "alarms": [a.get("name") for a in alarms if isinstance(a, dict)],
+        }

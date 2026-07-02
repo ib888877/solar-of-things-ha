@@ -856,3 +856,21 @@ class SolarOfThingsAPI:
         except Exception as err:
             _LOGGER.error("SolarOfThings: connection test failed: %s", err)
             return False
+
+    def fetch_state(self, device_id: str) -> dict[str, Any]:
+            """Fetch the full latest device state (all attribute fields + alarms)."""
+            from .const import API_STATE_LATEST
+            self._ensure_token_valid()
+            url = f"{API_BASE_URL}{API_STATE_LATEST}?deviceId={device_id}&dataSource=1"
+            resp = self.session.get(url, timeout=30)
+            if resp.status_code == 401:
+                self._access_expires = None
+                self._ensure_token_valid()
+                resp = self.session.get(url, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") not in (0, None):
+                raise RuntimeError(
+                    f"State fetch error code={data.get('code')} message={data.get('message')}"
+                )
+            return data.get("data") or {}
