@@ -594,14 +594,14 @@ class SolarOfThingsAPI:
         end_time = self._now()
         start_time = end_time - timedelta(hours=1)
 
+        # Original keys + alternate attribute keys used by PI30 / VMIII
+        # (Voltronic-style) inverters. Whichever the model exposes is used.
         keys = [
-            "pvInputPower",
+            "pvInputPower", "generationPower", "PV1ChargingPower", "PV2ChargingPower",
             "acOutputActivePower",
-            "batteryDischargeCurrent",
-            "batteryChargingCurrent",
-            "batteryVoltage",
+            "batteryDischargeCurrent", "batteryChargingCurrent", "batteryVoltage",
+            "batterySOC", "batteryCapacity", "batteryPercentage",
             "feedInPower",
-            "batterySOC",
         ]
 
         data = self._post(
@@ -630,6 +630,32 @@ class SolarOfThingsAPI:
         for key, arr in fields.items():
             if isinstance(arr, list) and arr:
                 latest_values[key] = arr[-1]
+
+        # ── Model-dependent key resolution ──────────────────────────────────
+        # PV input power: pvInputPower, else generationPower (kW→W),
+        # else PV1+PV2 charging power (already W).
+        if latest_values.get("pvInputPower") in (None, ""):
+            if latest_values.get("generationPower") not in (None, ""):
+                try:
+                    latest_values["pvInputPower"] = float(latest_values["generationPower"]) * 1000.0
+                except Exception:
+                    pass
+            else:
+                try:
+                    pv1 = float(latest_values.get("PV1ChargingPower") or 0)
+                    pv2 = float(latest_values.get("PV2ChargingPower") or 0)
+                    if pv1 or pv2:
+                        latest_values["pvInputPower"] = pv1 + pv2
+                except Exception:
+                    pass
+
+        # Battery SOC: batterySOC, else batteryCapacity, else batteryPercentage.
+        if latest_values.get("batterySOC") in (None, ""):
+            soc = latest_values.get("batteryCapacity")
+            if soc in (None, ""):
+                soc = latest_values.get("batteryPercentage")
+            if soc not in (None, ""):
+                latest_values["batterySOC"] = soc
 
         # Unit normalisation: acOutputActivePower is kW in API → W
         if "acOutputActivePower" in latest_values:
